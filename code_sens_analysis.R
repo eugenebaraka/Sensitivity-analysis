@@ -1,0 +1,219 @@
+#########################################################################################
+# Title: Estimate the effect of hormone replacement therapy on risk of colorectal cancer
+# Authors: Sallah, Claire & Eugene
+# Date: 2022-10-10
+#########################################################################################
+
+# Install necessary Packages 
+
+library(tidyverse)
+library(table1)
+library(tableone)
+library(MASS)
+library(survival)
+library(ggpubr)
+library(Epi)
+library(readxl)
+library(survminer)
+library(base)
+library(sjPlot) #Prints readable regression summaries & interaction plots
+library(sjmisc)
+library(sjlabelled)
+library(lsmeans)
+library(htmlTable)
+library(janitor)
+emm_options(opt.digits = FALSE)
+
+# personalized theme
+all_theme <- theme_bw() + theme(panel.border = element_rect(color = "black", size = 1.2),
+                                panel.grid.major = element_blank(),
+                                panel.grid.minor = element_blank())
+
+
+
+
+
+## Explanatory Analysis
+
+
+df<-read.csv("HRTdata2021trans.csv", header = TRUE) 
+head(df)
+index_reference_year<-as.Date("1960-01-01")
+df$index_date<-as.Date(index_reference_year + days(df$INDEX)) 
+df$index_year<-format(df$index_date, format="%Y")
+df$DOB<-as.vector(df$DOB)
+df$birth_year<-substr(df$DOB, 1,4) #extract year from the date of birth
+df$month<-substr(df$DOB, 5,6)
+df$age_at_index<-as.numeric(df$index_year) - as.numeric(df$birth_year) #calculate ages 
+df$agegroup <- cut(df$age_at_index,3,labels = c("50-69", "70-89", "90+")) #categorize the ages into different groups 
+
+
+#NSAIDS use in years before the index date
+df$NS_EXP1<-factor(df$NS_EXP1, levels = c(1,0), labels = c("1-5","Never"))
+df$NS_EXP2<-factor(df$NS_EXP2, levels = c(1,0), labels = c("6-10","Never"))
+df$NS_EXP3<-factor(df$NS_EXP3, levels = c(1,0), labels = c("11-15","Never"))
+df$case<-factor(df$case, levels = c(1,0), labels = c("Cases" ,"Controls"))
+
+#Use of prescription drug prior to index date
+
+##Cardiovascular drugs
+df$NUM56_1<-as.factor(df$NUM56_1)
+df$NUM56_2<-as.factor(df$NUM56_2)
+df$NUM56_3<-as.factor(df$NUM56_3)
+
+## Central nervous system drugs 
+df$NUM57_1<-as.factor(df$NUM57_1)
+df$NUM57_2<-as.factor(df$NUM57_2)
+df$NUM57_3<-as.factor(df$NUM57_3)
+
+## Other hormones 
+df$NUM61_1<-as.factor(df$NUM61_1)
+df$NUM61_2<-as.factor(df$NUM61_2)
+df$NUM61_3<-as.factor(df$NUM61_3)
+
+## Vitamins
+df$NUM63_1<-as.factor(df$NUM63_1)
+df$NUM63_2<-as.factor(df$NUM63_2)
+df$NUM63_3<-as.factor(df$NUM63_3)
+
+#Oral contraceptives 
+df$OC_EVER<-as.factor(df$OC_EVER)
+
+
+#Doctor Visits 
+df$docvis1<-as.factor(df$docvis1) #frequency of doctor visits in year before index date
+df$docvis<-as.factor(df$docvis) # frequency of doctor visits 2-5 years before index date 
+
+# Sigmoidoscopy 
+df$SIG1EVR<-as.factor(df$SIG1EVR) #at least 1 procedure in  1-2 year before index 
+df$SIG2EVR<-as.factor(df$SIG2EVR) #at least 1 procedure in 3-5 years before index
+
+
+ 
+# Exposures 
+df$ev_rx1<-as.factor(df$ev_rx1)
+df$ev_td<-as.factor(df$ev_td)
+df$mix<-as.factor(df$mix)
+
+# Group the drugs into the same group irrespective of year  
+df$cardio<-ifelse(df$NUM56_1=="1 or more" | df$NUM56_2=="1 or more" | df$NUM56_3=="1 or more", 1,0)
+
+df$central<-ifelse(df$NUM57_1=="1 or more" | df$NUM57_2=="1 or more" | df$NUM57_3=="1 or more", 1,0)
+
+df$other_hor<-ifelse(df$NUM61_1=="1 or more" | df$NUM61_2=="1 or more" | df$NUM61_3=="1 or more", 1,0)
+
+df$vita<-ifelse(df$NUM63_1=="1 or more" | df$NUM63_2=="1 or more" | df$NUM63_3=="1 or more", 1,0)
+
+df$cardio<-as.factor(df$cardio)
+df$central<-as.factor(df$central)
+df$other_hor<-as.factor(df$other_hor)
+df$vita<-as.factor(df$vita)
+tab1<-table1::table1(~age_at_index + agegroup + NS_EXP1 + NS_EXP2 + NS_EXP3 + cardio + central + other_hor + vita +
+                 OC_EVER + docvis1 + docvis + SIG1EVR + SIG2EVR | case, data=df,topclass="Rtable1", overall=TRUE)
+
+
+
+
+
+# Model building 
+
+data<-read.csv("HRTdata2021trans.csv", header = TRUE) 
+ 
+index_reference_year<-as.Date("1960-01-01")
+data$index_date<-as.Date(index_reference_year + lubridate::days(data$INDEX)) 
+data$index_year<-format(data$index_date, format="%Y")
+data$DOB<-as.vector(data$DOB)
+data$birth_year<-substr(data$DOB, 1,4) #extract year from the date of birth
+data$month<-substr(data$DOB, 5,6)
+data$age_at_index<-as.numeric(data$index_year) - as.numeric(data$birth_year) #calculate ages 
+
+data$CASE_ID<-as.numeric(data$CASE_ID)
+data$ev_rx1<-as.factor(data$ev_rx1)
+data$ev_td<-as.factor(data$ev_td)
+data$mix<-as.factor(data$mix)
+df<-data[order(data$CASE_ID),]
+df$cardio<-ifelse(df$NUM56_1=="1 or more" | df$NUM56_2=="1 or more" | df$NUM56_3=="1 or more", 1,0)
+
+df$central<-ifelse(df$NUM57_1=="1 or more" | df$NUM57_2=="1 or more" | df$NUM57_3=="1 or more", 1,0)
+
+df$other_hor<-ifelse(df$NUM61_1=="1 or more" | df$NUM61_2=="1 or more" | df$NUM61_3=="1 or more", 1,0)
+
+df$vita<-ifelse(df$NUM63_1=="1 or more" | df$NUM63_2=="1 or more" | df$NUM63_3=="1 or more", 1,0)
+
+df$cardio<-as.factor(df$cardio)
+df$central<-as.factor(df$central)
+df$other_hor<-as.factor(df$other_hor)
+df$vita<-as.factor(df$vita)
+
+
+#models
+model_td<-clogit(case ~ ev_td+ strata(CASE_ID), data = df)
+model_rx<-clogit(case ~ ev_rx1+strata(CASE_ID), data = df)
+model_mix<-clogit(case ~ mix+strata(CASE_ID), data = df)
+sum1<-gtsummary::tbl_regression(model_td, exponentiate = TRUE)
+sum2<-gtsummary::tbl_regression(model_rx, exponentiate = TRUE)
+sum3<-gtsummary::tbl_regression(model_mix, exponentiate = TRUE)
+
+
+broom::tidy(model_td,exp=T)
+
+modelAll<-clogit(case~ ev_td+ev_rx1+mix+ strata(CASE_ID), data = df)
+
+
+
+
+
+#model selection
+
+model<-clogit(case~ ev_td+ev_rx1+mix+cardio+central+ vita+ OC_EVER+docvis+docvis1+ strata(CASE_ID), data = df)
+
+step(model)
+
+
+
+#Non HRT USERS 
+df$non_hrt_users<-ifelse(df$ev_rx1=="0" & df$ev_td=="0" & df$mix=="0", 1,0)
+df$non_hrt_users%>%sum() 
+
+#non HRT users in Cases 
+df$non_hrt_users_cases<-ifelse(df$ev_rx1=="0" & df$ev_td=="0" & df$mix=="0" & df$case=="1", 1,0)
+df$non_hrt_users_cases %>% sum()
+
+#non HRT users in control group
+df$non_hrt_users_control<-ifelse(df$ev_rx1=="0" & df$ev_td=="0" & df$mix=="0" & df$case=="0", 1,0)
+df$non_hrt_users_control%>%sum()
+
+
+#Oral users in the cases 
+df$oral_users_cases<-ifelse(df$ev_rx1=="1" &  df$case=="1", 1,0)
+df$oral_users_cases %>% sum()
+
+#non-oral users in the cases 
+df$non_oral_uers_in_cases<-ifelse(df$ev_rx1=="0" & df$case=="1",1,0)
+df$non_oral_uers_in_cases %>% sum()
+
+#Oral users in the controls 
+df$oral_users_control<-ifelse(df$ev_rx1=="1" &  df$case=="0", 1,0)
+df$oral_users_control %>% sum()
+
+#non oral users in the control group 
+df$non_oral_users_control<-ifelse(df$ev_rx1=="0" &  df$case=="0", 1,0)
+df$non_oral_users_control %>% sum()
+
+
+#trd users in the cases 
+df$trd_users_cases<-ifelse(df$ev_td=="1" &  df$case=="1", 1,0)
+df$trd_users_cases %>% sum()
+
+#non-trd users in cases 
+df$non_trd_users_cases<-ifelse(df$ev_td=="0" &  df$case=="1", 1,0)
+df$non_trd_users_cases %>% sum()
+
+#trd users in the controls 
+df$trd_users_control<-ifelse(df$ev_td=="1" &  df$case=="0", 1,0)
+df$trd_users_control %>% sum()
+
+#non trd users in the controls 
+df$non_trd_users_control<-ifelse(df$ev_td=="0" &  df$case=="0", 1,0)
+df$non_trd_users_control %>% sum()
+
